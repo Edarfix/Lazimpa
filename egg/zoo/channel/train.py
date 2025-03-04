@@ -382,14 +382,14 @@ def main(params):
         for x in messages:
             x = x.cpu().numpy()
             all_messages.append(x)
-        all_messages = np.asarray(all_messages)
+        #all_messages = np.asarray(all_messages)
 
         if epoch%50==0:
             torch.save(sender.state_dict(), opts.dir_save+"/sender/sender_weights"+str(epoch)+".pth")
             torch.save(receiver.state_dict(), opts.dir_save+"/receiver/receiver_weights"+str(epoch)+".pth")
             #print(acc_vec)
 
-        np.save(opts.dir_save+'/messages/messages_'+str((epoch))+'.npy', all_messages)
+        np.save(opts.dir_save + '/messages/messages_' + str(epoch) + '.npy', np.array(all_messages, dtype=object), allow_pickle=True)
         np.save(opts.dir_save+'/accuracy/accuracy_'+str((epoch))+'.npy', acc_vec)
 
     core.close()
