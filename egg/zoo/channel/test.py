@@ -283,7 +283,7 @@ def main(params):
     for x in messages:
         x = x.cpu().numpy()
         all_messages.append(x)
-    all_messages = np.asarray(all_messages)
+    #all_messages = np.asarray(all_messages)
 
     messages=-1*np.ones((opts.n_features,opts.max_len))
 
