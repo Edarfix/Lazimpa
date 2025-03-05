@@ -37,7 +37,7 @@ class Encoder(nn.Module):
         messages, lengths = x
         emb = self.embedding(messages)
 
-        packed = nn.utils.rnn.pack_padded_sequence(emb, lengths, batch_first=True)
+        packed = nn.utils.rnn.pack_padded_sequence(emb, lengths.detach().cpu(), batch_first=True)
         _, rnn_hidden = self.cell(packed)
         if isinstance(rnn_hidden, tuple):  # lstm returns c_n, don't need it
             rnn_hidden = rnn_hidden[0]
