@@ -15,6 +15,7 @@ from egg.zoo.channel.archs import Sender, Receiver
 from egg.core.reinforce_wrappers import RnnReceiverImpatient
 from egg.core.reinforce_wrappers import SenderImpatientReceiverRnnReinforce
 from egg.core.util import dump_sender_receiver_impatient
+import platform
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -227,7 +228,7 @@ def dump(game, n_features, device, gs_mode, epoch):
 
     #print(f'Mean accuracy wrt uniform distribution is {unif_acc}')
     #print(f'Mean accuracy wrt powerlaw distribution is {powerlaw_acc}')
-    print(json.dumps({'powerlaw': powerlaw_acc, 'unif': unif_acc}))
+    print(json.dumps({'powerlaw': float(powerlaw_acc), 'unif': float(unif_acc)}))
 
     return acc_vec, messages
 
@@ -262,39 +263,38 @@ def dump_impatient(game, n_features, device, gs_mode,epoch):
     #print(f'Mean accuracy wrt uniform distribution is {unif_acc}')
     #print(f'Mean accuracy wrt powerlaw distribution is {powerlaw_acc}')
     if epoch%25==0:
-        print(json.dumps({'powerlaw': powerlaw_acc, 'unif': unif_acc}))
+        print(json.dumps({'powerlaw': float(powerlaw_acc), 'unif': float(unif_acc)}))
 
     return acc_vec, messages
 
 def main(params):
-    print(torch.cuda.is_available())
-    opts = get_params(params)
-    print(opts, flush=True)
-    device = opts.device
+    
+    print("🧠 PyTorch version:", torch.__version__)
+    print("🖥️  CUDA available:", torch.cuda.is_available())
 
+    if torch.cuda.is_available():
+        print("🚀 CUDA version:", torch.version.cuda)
+        print("🧪 cuDNN version:", torch.backends.cudnn.version())
+        print("🧠 Number of GPUs:", torch.cuda.device_count())
+
+        for i in range(torch.cuda.device_count()):
+            print(f"🔹 GPU {i}: {torch.cuda.get_device_name(i)}")
+            print(f"   - Memory Allocated: {torch.cuda.memory_allocated(i) / 1024**2:.2f} MB")
+            print(f"   - Memory Cached:    {torch.cuda.memory_reserved(i) / 1024**2:.2f} MB")
+    else:
+        print("⚠️  GPU not available. Running on CPU.")
+
+    print("🧰 Python version:", platform.python_version())
+    print(torch.cuda.is_available())
+    
+    opts = get_params(params)
+    print("PARAMETERS")
+    print(opts, flush=True)
+    
+    device = opts.device
     force_eos = opts.force_eos == 1
 
-    if opts.probs == 'uniform':
-        probs = np.ones(opts.n_features)
-    elif opts.probs == 'powerlaw':
-        probs = 1 / np.arange(1, opts.n_features+1, dtype=np.float32)
-    #elif opts.probs == "creneau":
-    #    ones = np.ones(int(opts.n_features/2))
-    #    tens = 10*np.ones(opts.n_features-int(opts.n_features/2))
-    #    probs = np.concatenate((tens,ones),axis=0)
-    #elif opts.probs == "toy":
-    #    fives = 5*np.ones(int(opts.n_features/10))
-    #    ones = np.ones(opts.n_features-int(opts.n_features/10))
-    #    probs = np.concatenate((fives,ones),axis=0)
-    #elif opts.probs == "escalier":
-    #    ones = np.ones(int(opts.n_features/4))
-    #    tens = 10*np.ones(int(opts.n_features/4))
-    #    huns = 100*np.ones(int(opts.n_features/4))
-    #    thous = 1000*np.ones(opts.n_features-3*int(opts.n_features/4))
-    #    probs = np.concatenate((thous,huns,tens,ones),axis=0)
-    else:
-        probs = np.array([float(x) for x in opts.probs.split(',')], dtype=np.float32)
-
+    probs = 1 / np.arange(1, opts.n_features+1, dtype=np.float32)
     probs /= probs.sum()
 
     print('the probs are: ', probs, flush=True)
@@ -302,56 +302,22 @@ def main(params):
     train_loader = OneHotLoader(n_features=opts.n_features, batch_size=opts.batch_size,
                                 batches_per_epoch=opts.batches_per_epoch, probs=probs)
 
-    # single batches with 1s on the diag
     test_loader = UniformLoader(opts.n_features)
 
-    if opts.sender_cell == 'transformer':
-        sender = Sender(n_features=opts.n_features, n_hidden=opts.sender_embedding)
-        sender = core.TransformerSenderReinforce(agent=sender, vocab_size=opts.vocab_size,
-                                                 embed_dim=opts.sender_embedding, max_len=opts.max_len,
-                                                 num_layers=opts.sender_num_layers, num_heads=opts.sender_num_heads,
-                                                 hidden_size=opts.sender_hidden,
-                                                 force_eos=opts.force_eos,
-                                                 generate_style=opts.sender_generate_style,
-                                                 causal=opts.causal_sender)
-    else:
-        sender = Sender(n_features=opts.n_features, n_hidden=opts.sender_hidden)
+    sender = Sender(n_features=opts.n_features, n_hidden=opts.sender_hidden)
+    sender = core.RnnSenderReinforce(sender,
+                                opts.vocab_size, opts.sender_embedding, opts.sender_hidden,
+                                cell=opts.sender_cell, max_len=opts.max_len, num_layers=opts.sender_num_layers,
+                                force_eos=force_eos)
 
-        sender = core.RnnSenderReinforce(sender,
-                                   opts.vocab_size, opts.sender_embedding, opts.sender_hidden,
-                                   cell=opts.sender_cell, max_len=opts.max_len, num_layers=opts.sender_num_layers,
-                                   force_eos=force_eos)
-    if opts.receiver_cell == 'transformer':
-        receiver = Receiver(n_features=opts.n_features, n_hidden=opts.receiver_embedding)
-        receiver = core.TransformerReceiverDeterministic(receiver, opts.vocab_size, opts.max_len,
-                                                         opts.receiver_embedding, opts.receiver_num_heads, opts.receiver_hidden,
-                                                         opts.receiver_num_layers, causal=opts.causal_receiver)
-    else:
+    receiver = Receiver(n_features=opts.receiver_hidden, n_hidden=opts.vocab_size)
+    receiver = RnnReceiverImpatient(receiver, opts.vocab_size, opts.receiver_embedding,
+                                    opts.receiver_hidden, cell=opts.receiver_cell,
+                                    num_layers=opts.receiver_num_layers, max_len=opts.max_len, n_features=opts.n_features)
 
-        receiver = Receiver(n_features=opts.n_features, n_hidden=opts.receiver_hidden)
 
-        if not opts.impatient:
-          receiver = Receiver(n_features=opts.n_features, n_hidden=opts.receiver_hidden)
-          receiver = core.RnnReceiverDeterministic(receiver, opts.vocab_size, opts.receiver_embedding,
-                                                 opts.receiver_hidden, cell=opts.receiver_cell,
-                                                 num_layers=opts.receiver_num_layers)
-        else:
-          receiver = Receiver(n_features=opts.receiver_hidden, n_hidden=opts.vocab_size)
-          # If impatient 1
-          receiver = RnnReceiverImpatient(receiver, opts.vocab_size, opts.receiver_embedding,
-                                            opts.receiver_hidden, cell=opts.receiver_cell,
-                                            num_layers=opts.receiver_num_layers, max_len=opts.max_len, n_features=opts.n_features)
-          # If impatient 2
-          #receiver = RnnReceiverImpatient2(receiver, opts.vocab_size, opts.receiver_embedding,
-        #                                         opts.receiver_hidden, cell=opts.receiver_cell,
-        #                                         num_layers=opts.receiver_num_layers, max_len=opts.max_len, n_features=opts.n_features)
 
-    if not opts.impatient:
-        game = core.SenderReceiverRnnReinforce(sender, receiver, loss, sender_entropy_coeff=opts.sender_entropy_coeff,
-                                           receiver_entropy_coeff=opts.receiver_entropy_coeff,
-                                           length_cost=opts.length_cost,unigram_penalty=opts.unigram_pen,reg=opts.reg)
-    else:
-        game = SenderImpatientReceiverRnnReinforce(sender, receiver, loss_impatient, sender_entropy_coeff=opts.sender_entropy_coeff,
+    game = SenderImpatientReceiverRnnReinforce(sender, receiver, loss_impatient, sender_entropy_coeff=opts.sender_entropy_coeff,
                                            receiver_entropy_coeff=opts.receiver_entropy_coeff,
                                            length_cost=opts.length_cost,unigram_penalty=opts.unigram_pen,reg=opts.reg)
 
@@ -372,25 +338,21 @@ def main(params):
         if opts.checkpoint_dir:
             trainer.save_checkpoint(name=f'{opts.name}_vocab{opts.vocab_size}_rs{opts.random_seed}_lr{opts.lr}_shid{opts.sender_hidden}_rhid{opts.receiver_hidden}_sentr{opts.sender_entropy_coeff}_reg{opts.length_cost}_max_len{opts.max_len}')
 
-        if not opts.impatient:
-            acc_vec,messages=dump(trainer.game, opts.n_features, device, False,epoch)
-        else:
-            acc_vec,messages=dump_impatient(trainer.game, opts.n_features, device, False,epoch)
 
-        # ADDITION TO SAVE MESSAGES
+        acc_vec,messages=dump_impatient(trainer.game, opts.n_features, device, False,epoch)
+
         all_messages=[]
         for x in messages:
             x = x.cpu().numpy()
             all_messages.append(x)
-        #all_messages = np.asarray(all_messages)
 
         if epoch%50==0:
-            torch.save(sender.state_dict(), opts.dir_save+"/sender/sender_weights"+str(epoch)+".pth")
-            torch.save(receiver.state_dict(), opts.dir_save+"/receiver/receiver_weights"+str(epoch)+".pth")
-            #print(acc_vec)
+            torch.save(sender.state_dict(), opts.dir_save+"/sender/sender_weights_epoch_"+str(epoch)+"_n_features_"+str(opts.n_features)+".pth")
+            torch.save(receiver.state_dict(), opts.dir_save+"/receiver/receiver_weights_epoch_"+str(epoch)+"_n_features_"+str(opts.n_features)+".pth")
 
-        np.save(opts.dir_save + '/messages/messages_' + str(epoch) + '.npy', np.array(all_messages, dtype=object), allow_pickle=True)
-        np.save(opts.dir_save+'/accuracy/accuracy_'+str((epoch))+'.npy', acc_vec)
+        np.save(opts.dir_save + '/messages/messages_epoch_' + str(epoch) + '_n_features_' + str(opts.n_features) + '.npy', np.array(all_messages, dtype=object), allow_pickle=True)
+        np.save(opts.dir_save+'/accuracy/accuracy_epoch_'+str(epoch)+'_n_features_'+str(opts.n_features)+'.npy', acc_vec)
+ 
 
     core.close()
 
